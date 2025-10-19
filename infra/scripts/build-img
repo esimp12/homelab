@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+
+set -eux
+
+QEMU_IMG_BIN="$1"
+QEMU_NBD_BIN="$2"
+OUT_IMG="$3"
+
+# Create qcow2 virtual disk image
+$QEMU_IMG_BIN create -f qcow2 $OUT_IMG 25G
+
+echo "${QEMU_NBD_BIN}"
+echo "${OUT_IMG}"

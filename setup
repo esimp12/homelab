@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+
+set -eux
+
+PACKAGES=(
+    bazel
+    qemu
+)
+
+sudo pacman -S --needed --noconfirm "${PACKAGES[@]}"

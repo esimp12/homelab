@@ -1,0 +1,21 @@
+###############################################################################
+# Bazel now uses Bzlmod by default to manage external dependencies.
+# Please consider migrating your external dependencies from WORKSPACE to MODULE.bazel.
+#
+# For more details, please check https://github.com/bazelbuild/bazel/issues/18958
+###############################################################################
+
+module(name = "homelab")
+
+new_local_repository = use_repo_rule("@bazel_tools//tools/build_defs/repo:local.bzl", "new_local_repository")
+new_local_repository(
+    name = "qemu_bins",
+    path = "/usr/bin",
+    build_file_content = """
+filegroup(name = "qemu_nbd", srcs = ["qemu-nbd"], visibility = ["//visibility:public"])
+filegroup(name = "qemu_img", srcs = ["qemu-img"], visibility = ["//visibility:public"])
+""",
+)
+
+register_toolchains("//tools/qemu:hermetic_toolchain")
+
