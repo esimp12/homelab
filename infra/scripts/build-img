@@ -6,8 +6,64 @@ QEMU_IMG_BIN="$1"
 QEMU_NBD_BIN="$2"
 OUT_IMG="$3"
 
-# Create qcow2 virtual disk image
-$QEMU_IMG_BIN create -f qcow2 $OUT_IMG 25G
+VDISK_DEVICE="/dev/nbd0"
 
-echo "${QEMU_NBD_BIN}"
-echo "${OUT_IMG}"
+function err() {
+    echo "[$(date +'%Y-%m-%dT%H:%M:%S%z')]: $*" >&2
+}
+
+function create_empty_virtual_disk() {
+    $QEMU_IMG_BIN create -f qcow2 $OUT_IMG $1 
+}
+
+function check_nbd() {
+    # check if we have a block device
+    if [ ! -b $1 ]; then
+        err "'${1}' is not a block device"
+        exit 1
+    fi
+    # check if block device is not already mounted
+    if [ ! "${1}" =~ ^/dev/nbd[0-9]+$ ]; then
+        err "'${1}' is not a network block device"
+        exit 1
+    fi
+
+    echo "'${1}' is a valid block device"
+}
+
+function mount_virtual_disk() {
+    check_nbd $VDISK_DEVICE 
+
+    echo "mounting '${1}' to '${VDISK_DEVICE}'"
+    $QEMU_NBD_BIN --fork --connect=$VDISK_DEVICE --format=qcow2 $OUT_IMG
+}
+
+
+# 1. Create the virtual disk to turn into a bootable iso
+create_empty_virtual_disk "25G"
+
+# 2. Mount the virtual disk
+mount_virtual_disk
+
+# TODO 3. Partition the virtual disk
+
+# TODO 4. Create filesystems for partitions
+
+# TODO 5. Mount the filesystems
+
+# TODO 6. Install base packages
+
+# TODO 7. Generate fstab
+
+# TODO 8. Set bootloader settings
+
+# TODO 9. Set root passwd (w/ arch-chroot)
+
+# TODO 10. Setup bootloader (w/ arch-chroot)
+
+# TODO: 11. Populate keyring (w/ arch-chroot)
+
+# TODO: 12. Unmount the filesystems
+
+# TODO: 13. Unmount the virtual disk
+
