@@ -1,1 +1,4 @@
-exports_files(["build-img"])
+exports_files([
+    "build-img",
+    "disk-layout.sfdisk",
+])

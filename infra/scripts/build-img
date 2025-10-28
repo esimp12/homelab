@@ -2,11 +2,16 @@
 
 set -eux
 
-QEMU_IMG_BIN="$1"
-QEMU_NBD_BIN="$2"
-OUT_IMG="$3"
+OUT_IMG="$1"
+DISK_LAYOUT="$2"
+
+QEMU_IMG_BIN="/usr/bin/qemu-img"
+QEMU_NBD_BIN="/usr/bin/qemu-nbd"
 
 VDISK_DEVICE="/dev/nbd0"
+VDISK_BOOT_DEVICE="${VDISK_DEVICE}p1"
+VDISK_SWAP_DEVICE="${VDISK_DEVICE}p2"
+VDISK_ROOT_DEVICE="${VDISK_DEVICE}p3"
 
 function err() {
     echo "[$(date +'%Y-%m-%dT%H:%M:%S%z')]: $*" >&2
@@ -23,7 +28,7 @@ function check_nbd() {
         exit 1
     fi
     # check if block device is not already mounted
-    if [ ! "${1}" =~ ^/dev/nbd[0-9]+$ ]; then
+    if [[ ! "${1}" =~ ^/dev/nbd[0-9]+$ ]]; then
         err "'${1}' is not a network block device"
         exit 1
     fi
@@ -31,11 +36,46 @@ function check_nbd() {
     echo "'${1}' is a valid block device"
 }
 
+function create_nbd_socket() {
+    sock=$(mktemp "/tmp/nbd.sock.XXXXXX")
+    echo $sock
+}
+
 function mount_virtual_disk() {
     check_nbd $VDISK_DEVICE 
 
-    echo "mounting '${1}' to '${VDISK_DEVICE}'"
-    $QEMU_NBD_BIN --fork --connect=$VDISK_DEVICE --format=qcow2 $OUT_IMG
+    echo "mounting '${OUT_IMG}' to '${VDISK_DEVICE}' using socket '${1}'"
+    $QEMU_NBD_BIN --fork --socket=$1 --connect=$VDISK_DEVICE --format=qcow2 $OUT_IMG
+}
+
+function partition_virtual_disk() {
+    check_nbd $VDISK_DEVICE
+
+    sudo sfdisk "${VDISK_DEVICE}" < "${DISK_LAYOUT}"
+}
+
+function create_filesystems() {
+    check_nbd $VDISK_DEVICE
+    check_nbd $VDISK_BOOT_DEVICE
+    check_nbd $VDISK_SWAP_DEVICE
+    check_nbd $VDISK_ROOT_DEVICE
+
+    mkfs.fat -F32 $VDISK_BOOT_DEVICE
+    mkswap $VDISK_SWAP_DEVICE
+    mkfs.ext4 $VDISK_ROOT_DEVICE
+}
+
+function mount_filesystems() {
+    check_nbd $VDISK_DEVICE
+    check_nbd $VDISK_BOOT_DEVICE
+    check_nbd $VDISK_SWAP_DEVICE
+    check_nbd $VDISK_ROOT_DEVICE
+
+    iso=$(mktemp "/tmp/archmnt.XXXXXX")
+    mount $VDISK_ROOT_DEVICE $iso
+    mount --mkdir $VDISK_BOOT_DEVICE "${iso}/boot"
+    swapon $VDISK_SWAP_DEVICE
+    echo $iso
 }
 
 
@@ -43,27 +83,61 @@ function mount_virtual_disk() {
 create_empty_virtual_disk "25G"
 
 # 2. Mount the virtual disk
-mount_virtual_disk
+nbd_socket=$(create_nbd_socket)
+mount_virtual_disk $nbd_socket
 
-# TODO 3. Partition the virtual disk
+# 3. Partition the virtual disk
+partition_virtual_disk
 
-# TODO 4. Create filesystems for partitions
+# 4. Create filesystems for partitions
+create_filesystems
 
-# TODO 5. Mount the filesystems
+# 5. Mount the filesystems
+iso=$(mount_filesystems) 
 
-# TODO 6. Install base packages
+# 6. Install base packages
+pacstrap -K $iso \
+    base \
+    linux \
+    grub \
+    efibootmgr \
+    vim \
+    openssh \
+    python \
+    qemu-guest-agent \
+    sudo \
+    archlinux-keyring
 
-# TODO 7. Generate fstab
+# 7. Generate fstab
+genfstab -U $iso >> "${iso}/etc/fstab"
 
-# TODO 8. Set bootloader settings
+# 8. Set bootloader settings
+arch-chroot $iso /bin/bash -c "mkdir -p /etc/default"
+echo <<EOF > "${iso}/etc/default/grub"
+GRUB_TIMEOUT=0
+GRUB_TIMEOUT_STYLE=hidden
+GRUB_DEFAULT=0
+EOF
 
-# TODO 9. Set root passwd (w/ arch-chroot)
+# 9. Setup bootloader (w/ arch-chroot)
+arch-chroot $iso /bin/bash -c <<EOF
+grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=archlinux
+grub-mkconfig -o /boot/grub/grub.cfg
+EOF
 
-# TODO 10. Setup bootloader (w/ arch-chroot)
+# 10. Set root passwd (w/ arch-chroot)
+arch-chroot $iso /bin/bash -c <<EOF
+echo "root:root" | chpasswd
+EOF
 
-# TODO: 11. Populate keyring (w/ arch-chroot)
+# 11. Populate keyring (w/ arch-chroot)
+arch-chroot $iso /bin/bash -c <<EOF
+pacman-key --init
+pacman-key --populate
+EOF
 
-# TODO: 12. Unmount the filesystems
+# 12. Unmount the filesystems
+umount -R $iso
 
-# TODO: 13. Unmount the virtual disk
-
+# 13. Unmount the virtual disk
+$QEMU_NBD_BIN --disconnect
