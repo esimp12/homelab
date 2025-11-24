@@ -1,2 +1,5 @@
 # Ignore bazel symlinks
 /bazel-*
+
+# Ignore qcow2 files
+*.qcow2
