@@ -4,7 +4,9 @@
 #
 # This will create a new bootable Arch Linux system on a virtual disk (qcow2).
 
-set -eux
+# TODO: Add trap to attempt to cleanup unmounting, removing tmp iso filesystem, and disconnecting nbd device when script exits early
+set -euo pipefail
+set -x
 
 OUT_IMG="$1"
 DISK_LAYOUT="$2"
@@ -12,10 +14,16 @@ DISK_LAYOUT="$2"
 QEMU_IMG_BIN="/usr/bin/qemu-img"
 QEMU_NBD_BIN="/usr/bin/qemu-nbd"
 
+ISO="/mnt/archmnt"
+
 VDISK_DEVICE="/dev/nbd0"
 VDISK_BOOT_DEVICE="${VDISK_DEVICE}p1"
 VDISK_SWAP_DEVICE="${VDISK_DEVICE}p2"
 VDISK_ROOT_DEVICE="${VDISK_DEVICE}p3"
+
+HOST_SWAP_DEVICE="/dev/nvme0n1p2"
+
+NEW_USER="esimpson"
 
 function err() {
     echo "[$(date +'%Y-%m-%dT%H:%M:%S%z')]: $*" >&2
@@ -86,16 +94,15 @@ function create_filesystems() {
 }
 
 function mount_filesystems() {
-    check_nbd $VDISK_DEVICE > /dev/null 2&>1
-    check_nbd_partition $VDISK_BOOT_DEVICE > /dev/null 2&>1
-    check_nbd_partition $VDISK_SWAP_DEVICE > /dev/null 2&>1
-    check_nbd_partition $VDISK_ROOT_DEVICE > /dev/null 2&>1
+    check_nbd $VDISK_DEVICE > /dev/null 2>&1
+    check_nbd_partition $VDISK_BOOT_DEVICE > /dev/null 2>&1
+    check_nbd_partition $VDISK_SWAP_DEVICE > /dev/null 2>&1
+    check_nbd_partition $VDISK_ROOT_DEVICE > /dev/null 2>&1
 
-    iso=$(mktemp -d /tmp/archmnt.XXXXXX)
-    sudo mount $VDISK_ROOT_DEVICE $iso
-    sudo mount --mkdir $VDISK_BOOT_DEVICE ${iso}/boot
+    sudo mkdir -p $ISO 
+    sudo mount $VDISK_ROOT_DEVICE $ISO
+    sudo mount --mkdir $VDISK_BOOT_DEVICE ${ISO}/boot
     sudo swapon $VDISK_SWAP_DEVICE
-    echo $iso
 }
 
 # 0. Enable nbd disks for system
@@ -114,10 +121,10 @@ partition_virtual_disk
 create_filesystems
 
 # 5. Mount the filesystems
-iso=$(mount_filesystems) 
+mount_filesystems 
 
 # 6. Install base packages
-sudo pacstrap -K $iso \
+sudo pacstrap -K $ISO \
     base \
     linux \
     grub \
@@ -129,41 +136,60 @@ sudo pacstrap -K $iso \
     sudo \
     archlinux-keyring
 
-# 7. Generate fstab
-echo "$(genfstab -U $iso)" | sudo tee -a "${iso}/etc/fstab"
+# 7. Generate fstab (handle host swapfile as well)
+sudo swapoff $HOST_SWAP_DEVICE
+echo "$(genfstab -U ${ISO})" | sudo tee -a "${ISO}/etc/fstab"
+sudo swapon $HOST_SWAP_DEVICE
 
-# 8. Set bootloader settings
-sudo arch-chroot $iso /bin/bash -c "mkdir -p /etc/default"
-sudo tee "${iso}/etc/default/grub" <<EOF
+# 8. Run systemd-firstboot
+sudo rm "${ISO}/etc/machine-id"
+sudo arch-chroot $ISO /usr/bin/systemd-firstboot --locale=C.UTF-8 --timezone=UTC --hostname=archlinux --keymap=us
+
+# 9. Set bootloader settings
+sudo arch-chroot $ISO /bin/bash -c "mkdir -p /etc/default"
+sudo tee "${ISO}/etc/default/grub" <<EOF
 GRUB_TIMEOUT=0
 GRUB_TIMEOUT_STYLE=hidden
 GRUB_DEFAULT=0
 EOF
 
-# 9. Setup bootloader (w/ arch-chroot)
-sudo arch-chroot $iso /bin/bash <<EOF
+# 10. Setup bootloader (w/ arch-chroot)
+sudo arch-chroot $ISO /bin/bash <<EOF
 grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=archlinux
 grub-mkconfig -o /boot/grub/grub.cfg
 EOF
 
-# 10. Set root passwd (w/ arch-chroot)
-sudo arch-chroot $iso /bin/bash <<EOF
-echo "root:root" | chpasswd
-EOF
+# 11. Setup locale
+echo "en_US.UTF-8 UTF-8" | sudo tee "${ISO}/etc/locale.gen"
+sudo arch-chroot $ISO /usr/bin/locale-gen
+echo "LANG=en_US.UTF-8" | sudo tee "${ISO}/etc/locale.conf"
+echo "KEYMAP=us" | sudo tee "${ISO}/etc/vconsole.conf"
 
-# 11. Populate keyring (w/ arch-chroot)
-sudo arch-chroot $iso /bin/bash <<EOF
+# 12. Setup users (w/ arch-chroot)
+echo -e "root\nroot" | sudo arch-chroot $ISO /usr/bin/passwd root
+sudo arch-chroot $ISO /usr/bin/usermod -s /bin/bash root
+sudo arch-chroot $ISO /usr/bin/useradd -s /bin/bash -m -U $NEW_USER
+echo -e "${NEW_USER}\n${NEW_USER}" | sudo arch-chroot $ISO /usr/bin/passwd $NEW_USER
+echo "${NEW_USER} ALL=(ALL) NOPASSWD: ALL" | sudo tee "${ISO}/etc/sudoers.d/${NEW_USER}"
+
+# 13. Populate keyring (w/ arch-chroot)
+sudo arch-chroot $ISO /bin/bash <<EOF
 pacman-key --init
 pacman-key --populate
 EOF
 
-# 12. Unmount the filesystems
+# 14. Generate initramfs
+sudo arch-chroot $ISO /usr/bin/mkinitcpio -P
+
+
+# 15. Sync any buffered writes & Unmount the filesystems
+sync
 sudo umount $VDISK_BOOT_DEVICE
 sudo swapoff $VDISK_SWAP_DEVICE
 sudo umount -l $VDISK_ROOT_DEVICE
 
-# 13. Remove temporary mount
-sudo rm -r $iso
+# 16. Remove temporary mount
+sudo rm -r $ISO
 
-# 14. Unmount the virtual disk
+# 17. Unmount the virtual disk
 sudo $QEMU_NBD_BIN --disconnect $VDISK_DEVICE
