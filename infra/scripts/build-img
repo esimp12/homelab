@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Usage: ./build-img archlinux-spuma.img disk-layout.sfdisk
+# Usage: ./build-img archlinux-spuma.img disk-layout.sfdisk ~/.ssh/id_rsa.pub
 #
 # This will create a new bootable Arch Linux system on a virtual disk (qcow2).
 
@@ -10,6 +10,7 @@ set -x
 
 OUT_IMG="$1"
 DISK_LAYOUT="$2"
+SSH_PUB_KEY_PATH="$3"
 
 QEMU_IMG_BIN="/usr/bin/qemu-img"
 QEMU_NBD_BIN="/usr/bin/qemu-nbd"
@@ -105,25 +106,25 @@ function mount_filesystems() {
     sudo swapon $VDISK_SWAP_DEVICE
 }
 
-# 0. Enable nbd disks for system
+# Enable nbd disks for system
 enable_virtual_disks
 
-# 1. Create the virtual disk to turn into a bootable iso
+# Create the virtual disk to turn into a bootable iso
 create_empty_virtual_disk "25G"
 
-# 2. Mount the virtual disk
+# Mount the virtual disk
 mount_virtual_disk
 
-# 3. Partition the virtual disk
+# Partition the virtual disk
 partition_virtual_disk
 
-# 4. Create filesystems for partitions
+# Create filesystems for partitions
 create_filesystems
 
-# 5. Mount the filesystems
+# Mount the filesystems
 mount_filesystems 
 
-# 6. Install base packages
+# Install base packages
 sudo pacstrap -K $ISO \
     base \
     linux \
@@ -136,16 +137,16 @@ sudo pacstrap -K $ISO \
     sudo \
     archlinux-keyring
 
-# 7. Generate fstab (handle host swapfile as well)
+# Generate fstab (handle host swapfile as well)
 sudo swapoff $HOST_SWAP_DEVICE
 echo "$(genfstab -U ${ISO})" | sudo tee -a "${ISO}/etc/fstab"
 sudo swapon $HOST_SWAP_DEVICE
 
-# 8. Run systemd-firstboot
+# Run systemd-firstboot
 sudo rm "${ISO}/etc/machine-id"
 sudo arch-chroot $ISO /usr/bin/systemd-firstboot --locale=C.UTF-8 --timezone=UTC --hostname=archlinux --keymap=us
 
-# 9. Set bootloader settings
+# Set bootloader settings
 sudo arch-chroot $ISO /bin/bash -c "mkdir -p /etc/default"
 sudo tee "${ISO}/etc/default/grub" <<EOF
 GRUB_TIMEOUT=0
@@ -153,43 +154,50 @@ GRUB_TIMEOUT_STYLE=hidden
 GRUB_DEFAULT=0
 EOF
 
-# 10. Setup bootloader (w/ arch-chroot)
+# Setup bootloader (w/ arch-chroot)
 sudo arch-chroot $ISO /bin/bash <<EOF
 grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=archlinux
 grub-mkconfig -o /boot/grub/grub.cfg
 EOF
 
-# 11. Setup locale
+# Setup locale
 echo "en_US.UTF-8 UTF-8" | sudo tee "${ISO}/etc/locale.gen"
 sudo arch-chroot $ISO /usr/bin/locale-gen
 echo "LANG=en_US.UTF-8" | sudo tee "${ISO}/etc/locale.conf"
 echo "KEYMAP=us" | sudo tee "${ISO}/etc/vconsole.conf"
 
-# 12. Setup users (w/ arch-chroot)
-echo -e "root\nroot" | sudo arch-chroot $ISO /usr/bin/passwd root
-sudo arch-chroot $ISO /usr/bin/usermod -s /bin/bash root
+# Setup users (w/ arch-chroot)
 sudo arch-chroot $ISO /usr/bin/useradd -s /bin/bash -m -U $NEW_USER
 echo -e "${NEW_USER}\n${NEW_USER}" | sudo arch-chroot $ISO /usr/bin/passwd $NEW_USER
 echo "${NEW_USER} ALL=(ALL) NOPASSWD: ALL" | sudo tee "${ISO}/etc/sudoers.d/${NEW_USER}"
 
-# 13. Populate keyring (w/ arch-chroot)
+# Setup SSH (w/ arch-chroot)
+pubkey_filename="${SSH_PUB_KEY_PATH##*/}"
+sudo arch-chroot $ISO /usr/bin/mkdir -m 0700 "/home/${NEW_USER}/.ssh"
+sudo arch-chroot $ISO /usr/bin/chown "${NEW_USER}:${NEW_USER}" "/home/${NEW_USER}/.ssh"
+sudo cp $SSH_PUB_KEY_PATH "${ISO}/home/${NEW_USER}/.ssh/${pubkey_filename}"
+sudo arch-chroot $ISO /usr/bin/chmod 0644 "/home/${NEW_USER}/.ssh/${pubkey_filename}"
+sudo arch-chroot $ISO /usr/bin/chown "${NEW_USER}:${NEW_USER}" "/home/${NEW_USER}/.ssh/${pubkey_filename}"
+sudo arch-chroot $ISO /usr/bin/systemctl enable sshd
+sudo arch-chroot $ISO /usr/bin/systemctl start sshd
+
+# Populate keyring (w/ arch-chroot)
 sudo arch-chroot $ISO /bin/bash <<EOF
 pacman-key --init
 pacman-key --populate
 EOF
 
-# 14. Generate initramfs
+# Generate initramfs
 sudo arch-chroot $ISO /usr/bin/mkinitcpio -P
 
-
-# 15. Sync any buffered writes & Unmount the filesystems
+# Sync any buffered writes & Unmount the filesystems
 sync
 sudo umount $VDISK_BOOT_DEVICE
 sudo swapoff $VDISK_SWAP_DEVICE
 sudo umount -l $VDISK_ROOT_DEVICE
 
-# 16. Remove temporary mount
+# Remove temporary mount
 sudo rm -r $ISO
 
-# 17. Unmount the virtual disk
+# Unmount the virtual disk
 sudo $QEMU_NBD_BIN --disconnect $VDISK_DEVICE

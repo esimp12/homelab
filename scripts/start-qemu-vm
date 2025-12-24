@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+
+set -eux
+
+IMG=$1
+
+qemu-system-x86_64 \
+  -m 2048 \
+  -enable-kvm \
+  -drive if=pflash,format=raw,readonly=on,file=/usr/share/edk2/x64/OVMF_CODE.4m.fd \
+  -drive if=pflash,format=raw,file=OVMF_VARS.4m.fd \
+  -drive if=virtio,format=qcow2,file=$IMG \
+  -vnc :0 \
+  -daemonize
