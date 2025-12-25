@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+
+# Find the IP address of a QEMU VM with qemu-guest-agent installed and enabled
+
+printf '{"execute": "guest-network-get-interfaces"}\n' \
+    | sudo socat - UNIX-CONNECT:/run/qga.sock \
+    | jq \
+    | grep 10.0.0

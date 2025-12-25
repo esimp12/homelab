@@ -1,0 +1,10 @@
+[Match]
+Name=br0
+
+[Link]
+ActivationPolicy=always
+
+[Network]
+Address=10.0.0.1/24
+IPForward=yes
+ConfigureWithoutCarrier=yes

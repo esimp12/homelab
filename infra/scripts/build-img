@@ -172,20 +172,36 @@ echo -e "${NEW_USER}\n${NEW_USER}" | sudo arch-chroot $ISO /usr/bin/passwd $NEW_
 echo "${NEW_USER} ALL=(ALL) NOPASSWD: ALL" | sudo tee "${ISO}/etc/sudoers.d/${NEW_USER}"
 
 # Setup SSH (w/ arch-chroot)
-pubkey_filename="${SSH_PUB_KEY_PATH##*/}"
 sudo arch-chroot $ISO /usr/bin/mkdir -m 0700 "/home/${NEW_USER}/.ssh"
 sudo arch-chroot $ISO /usr/bin/chown "${NEW_USER}:${NEW_USER}" "/home/${NEW_USER}/.ssh"
-sudo cp $SSH_PUB_KEY_PATH "${ISO}/home/${NEW_USER}/.ssh/${pubkey_filename}"
-sudo arch-chroot $ISO /usr/bin/chmod 0644 "/home/${NEW_USER}/.ssh/${pubkey_filename}"
-sudo arch-chroot $ISO /usr/bin/chown "${NEW_USER}:${NEW_USER}" "/home/${NEW_USER}/.ssh/${pubkey_filename}"
-sudo arch-chroot $ISO /usr/bin/systemctl enable sshd
-sudo arch-chroot $ISO /usr/bin/systemctl start sshd
+sudo cp $SSH_PUB_KEY_PATH "${ISO}/home/${NEW_USER}/.ssh/authorized_keys"
+sudo arch-chroot $ISO /usr/bin/chmod 0600 "/home/${NEW_USER}/.ssh/authorized_keys"
+sudo arch-chroot $ISO /usr/bin/chown "${NEW_USER}:${NEW_USER}" "/home/${NEW_USER}/.ssh/authorized_keys"
+
+# Setup Network
+sudo tee "${ISO}/etc/systemd/network/10-dhcp.network" <<EOF
+[Match]
+Name=en*
+Name=eth*
+
+[Link]
+RequiredForOnline=routable
+
+[Network]
+DHCP=yes
+EOF
 
 # Populate keyring (w/ arch-chroot)
 sudo arch-chroot $ISO /bin/bash <<EOF
 pacman-key --init
 pacman-key --populate
 EOF
+
+# Enable services
+services=(sshd systemd-networkd systemd-resolved qemu-guest-agent)
+for service in "${services[@]}"; do
+    sudo arch-chroot $ISO /usr/bin/systemctl enable $service
+done
 
 # Generate initramfs
 sudo arch-chroot $ISO /usr/bin/mkinitcpio -P
