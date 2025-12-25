@@ -168,7 +168,6 @@ echo "KEYMAP=us" | sudo tee "${ISO}/etc/vconsole.conf"
 
 # Setup users (w/ arch-chroot)
 sudo arch-chroot $ISO /usr/bin/useradd -s /bin/bash -m -U $NEW_USER
-echo -e "${NEW_USER}\n${NEW_USER}" | sudo arch-chroot $ISO /usr/bin/passwd $NEW_USER
 echo "${NEW_USER} ALL=(ALL) NOPASSWD: ALL" | sudo tee "${ISO}/etc/sudoers.d/${NEW_USER}"
 
 # Setup SSH (w/ arch-chroot)
@@ -177,6 +176,9 @@ sudo arch-chroot $ISO /usr/bin/chown "${NEW_USER}:${NEW_USER}" "/home/${NEW_USER
 sudo cp $SSH_PUB_KEY_PATH "${ISO}/home/${NEW_USER}/.ssh/authorized_keys"
 sudo arch-chroot $ISO /usr/bin/chmod 0600 "/home/${NEW_USER}/.ssh/authorized_keys"
 sudo arch-chroot $ISO /usr/bin/chown "${NEW_USER}:${NEW_USER}" "/home/${NEW_USER}/.ssh/authorized_keys"
+sudo arch-chroot $ISO /usr/bin/sed -i -e '/^#PermitRootLogin/s/^.*$/PermitRootLogin no/' /etc/ssh/sshd_config
+sudo arch-chroot $ISO /usr/bin/sed -i -e '/^#PasswordAuthentication/s/^.*$/PasswordAuthentication no/' /etc/ssh/sshd_config
+sudo arch-chroot $ISO /usr/bin/sed -i -e '/^#PubkeyAuthentication/s/^.*$/PubkeyAuthentication yes/' /etc/ssh/sshd_config
 
 # Setup Network
 sudo tee "${ISO}/etc/systemd/network/10-dhcp.network" <<EOF
